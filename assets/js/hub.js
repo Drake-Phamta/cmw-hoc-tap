@@ -14,10 +14,11 @@
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
   const pad2 = (n) => String(n).padStart(2, "0");
+  // the storage is looked up inside the try: where it is blocked even touching window.localStorage throws
   const store = {
-    get(k, s = localStorage) { try { return s.getItem(k); } catch (e) { return null; } },
-    set(k, v, s = localStorage) { try { s.setItem(k, v); } catch (e) { /* storage blocked */ } },
-    del(k, s = localStorage) { try { s.removeItem(k); } catch (e) { /* storage blocked */ } },
+    get(k, s = "localStorage") { try { return window[s].getItem(k); } catch (e) { return null; } },
+    set(k, v, s = "localStorage") { try { window[s].setItem(k, v); } catch (e) { /* storage blocked */ } },
+    del(k, s = "localStorage") { try { window[s].removeItem(k); } catch (e) { /* storage blocked */ } },
   };
   const typing = (el) => el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
 
@@ -36,7 +37,7 @@
       keyPromise = (async () => {
         let raw = window.__cmwKey;
         if (!raw) {
-          const b64 = store.get(KEY, sessionStorage) || store.get(KEY);
+          const b64 = store.get(KEY, "sessionStorage") || store.get(KEY);
           if (!b64) throw new Error("no key");
           raw = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
         }
@@ -150,9 +151,31 @@
   document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && document.body.classList.contains("nav-open")) setNav(false); });
   window.addEventListener("resize", () => { if (window.innerWidth > 959 && document.body.classList.contains("nav-open")) setNav(false); });
 
+  /* ---------------- start page: "Bạn là ai?" ----------------
+     Every member's steps are in the page; this shows the one chosen and remembers it on the device (localStorage
+     "cmw-who", read and written inside try/catch: without storage the page works, it just asks again next time). */
+  $$(".me").forEach((me) => {
+    const WHO = "cmw-who";
+    const btns = $$(".seg-btn", me);
+    const panels = $$(".me-panel", me);
+    const prompt = $(".me-prompt", me);
+    const rows = $$("tr[data-who]");
+    function choose(id, save) {
+      if (!btns.some((b) => b.dataset.who === id)) id = "";
+      btns.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.who === id)));
+      panels.forEach((p) => { p.hidden = p.dataset.who !== id; });
+      if (prompt) prompt.hidden = !!id;
+      rows.forEach((r) => r.classList.toggle("is-me", r.dataset.who === id));
+      if (save) { if (id) store.set(WHO, id); else store.del(WHO); }
+    }
+    btns.forEach((b) => b.addEventListener("click", () => choose(b.dataset.who, true)));
+    $$(".me-clear", me).forEach((c) => c.addEventListener("click", () => { choose("", true); if (btns[0]) btns[0].focus(); }));
+    choose(store.get(WHO) || "", false);
+  });
+
   /* ---------------- lock (published copy) ---------------- */
   $$("[data-lock]").forEach((b) => b.addEventListener("click", () => {
-    store.del(KEY, sessionStorage);
+    store.del(KEY, "sessionStorage");
     store.del(KEY);
     location.reload();
   }));
@@ -607,7 +630,12 @@
       k = Math.min(slots.length, Math.max(1, k));
       pagesEl.scrollTo({ top: slots[k - 1].el.offsetTop - 12, behavior: "smooth" });
     }
-    async function start() {
+    let starting = null;
+    function start() {
+      if (!starting) starting = begin().then(() => { if (!pdf) starting = null; });
+      return starting;
+    }
+    async function begin() {
       if (started) return;
       started = true;
       msg("Đang tải trình xem PDF…");
@@ -631,6 +659,7 @@
           if (en.isIntersecting) render(sl);
         }), { root: pagesEl, rootMargin: "600px 0px" });
         slots.forEach((sl) => io.observe(sl.el));
+        box.classList.add("on");
         layout();
         updatePage();
       } catch (e) {
@@ -639,8 +668,17 @@
       }
     }
     pagesEl.addEventListener("scroll", () => { if (slots.length) updatePage(); }, { passive: true });
+    // open the viewer (if it is not yet) and go to a page: the "Đi tới" buttons and a link ending in #trang-N
+    async function openAt(k) {
+      box.scrollIntoView({ block: "start" });
+      await start();
+      if (pdf) goTo(k);
+    }
     box.addEventListener("click", (ev) => {
+      const j = ev.target.closest("[data-pdf-goto]");
+      if (j) { openAt(+j.dataset.pdfGoto); return; }
       const b = ev.target.closest("[data-pdf-act]");
+      if (b && b.dataset.pdfAct === "open") { start(); return; }
       if (!b || !pdf) return;
       const act = b.dataset.pdfAct;
       if (act === "prev") goTo(current - 1);
@@ -656,10 +694,14 @@
     });
     let rz = null;
     window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if (pdf && fit) layout(); }, 200); });
-    if ("IntersectionObserver" in window) {
+    if (box.classList.contains("lazy")) { /* a big file: opens on a click, or from a #trang-N link */ }
+    else if ("IntersectionObserver" in window) {
       const io = new IntersectionObserver((e) => { if (e[0].isIntersecting) { io.disconnect(); start(); } }, { rootMargin: "200px" });
       io.observe(box);
     } else start();
+    const fromHash = () => { const m = /^#trang-(\d+)$/.exec(location.hash); return m ? +m[1] : 0; };
+    if (fromHash() && box === $(".pdfv")) openAt(fromHash());
+    window.addEventListener("hashchange", () => { if (fromHash() && box === $(".pdfv")) openAt(fromHash()); });
   });
 
   /* ---------------- the published copy is written with document.write: scroll to the #anchor ourselves ---------------- */

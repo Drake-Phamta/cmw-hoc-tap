@@ -16,9 +16,10 @@
 
   const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
   const toB64 = (u) => { let s = ""; for (const b of u) s += String.fromCharCode(b); return btoa(s); };
-  const read = (store) => { try { return store.getItem(KEY); } catch (e) { return null; } };
-  const write = (store, v) => { try { store.setItem(KEY, v); } catch (e) { /* storage blocked: ask again next page */ } };
-  const forget = () => { for (const s of [sessionStorage, localStorage]) { try { s.removeItem(KEY); } catch (e) { /* ignore */ } } };
+  // the storage is looked up by name inside the try: where it is blocked even touching window.localStorage throws
+  const read = (name) => { try { return window[name].getItem(KEY); } catch (e) { return null; } };
+  const write = (name, v) => { try { window[name].setItem(KEY, v); } catch (e) { /* storage blocked: ask again next page */ } };
+  const forget = () => { for (const s of ["sessionStorage", "localStorage"]) { try { window[s].removeItem(KEY); } catch (e) { /* ignore */ } } };
 
   async function openPage(raw) {
     const bytes = fromB64(payload);
@@ -66,8 +67,8 @@
       const raw = await derive(pw.value);
       const html = await openPage(raw);
       const b64 = toB64(raw);
-      write(sessionStorage, b64);
-      if (keep.checked) write(localStorage, b64);
+      write("sessionStorage", b64);
+      if (keep.checked) write("localStorage", b64);
       show(html, raw);
     } catch (e) {
       btn.disabled = false;
@@ -83,12 +84,12 @@
       btn.disabled = true;
       return;
     }
-    const saved = read(sessionStorage) || read(localStorage);
+    const saved = read("sessionStorage") || read("localStorage");
     if (saved) {
       try {
         const raw = fromB64(saved);
         const html = await openPage(raw);
-        write(sessionStorage, saved);
+        write("sessionStorage", saved);
         show(html, raw);
         return;
       } catch (e) {
